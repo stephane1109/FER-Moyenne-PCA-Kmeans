@@ -4,7 +4,7 @@
 # Contact : stephane.meurisse@example.com
 # Site Web : https://www.codeandcortex.fr
 # LinkedIn : https://www.linkedin.com/in/st%C3%A9phane-meurisse-27339055/
-# Date : 17 octobre 2024
+# Date : 18 octobre 2024
 ##########################################
 
 # pip install opencv-python-headless fer pandas matplotlib altair xlsxwriter scikit-learn numpy streamlit tensorflow yt_dlp seaborn
@@ -15,9 +15,8 @@
 import streamlit as st
 import subprocess
 import os
-import pandas as pd
 import numpy as np
-from collections import Counter
+import seaborn as sns
 from fer import FER
 import cv2
 from yt_dlp import YoutubeDL
@@ -27,6 +26,16 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from sklearn.metrics import silhouette_score
+from sklearn.metrics.pairwise import cosine_similarity
+import pandas as pd
+# import shutil #suppression du repertoire
+# import pysrt  # Nécessaire pour manipuler les fichiers SRT
+
+import shutil
+import os
+import subprocess
+from yt_dlp import YoutubeDL
+import streamlit as st
 
 
 # Fonction pour vider le cache
@@ -41,9 +50,23 @@ def definir_repertoire_travail():
     if not repertoire:
         st.write("Veuillez spécifier un chemin valide.")
         return ""
-    repertoire = os.path.abspath(repertoire.strip())
-    os.makedirs(repertoire, exist_ok=True)
-    st.write(f"Répertoire de travail : {repertoire}")
+    repertoire = repertoire.strip()
+    repertoire = os.path.abspath(repertoire)
+
+    # Si le répertoire existe déjà, suppression du contenu du répertoire des images
+    images_25fps = os.path.join(repertoire, "images_25fps")
+    if os.path.exists(images_25fps):
+        st.write("Le répertoire des images existe déjà, suppression de tout le contenu en cours...")
+        shutil.rmtree(images_25fps)  # Supprime tout le contenu du répertoire (fichiers et sous-dossiers)
+        st.write(f"Le répertoire {images_25fps} et son contenu ont été supprimés.")
+
+    # Création du répertoire de travail si nécessaire
+    if not os.path.exists(repertoire):
+        os.makedirs(repertoire)
+        st.write(f"Le répertoire a été créé : {repertoire}")
+    else:
+        st.write(f"Le répertoire existe déjà : {repertoire}")
+
     return repertoire
 
 
@@ -78,16 +101,32 @@ def extraire_images_25fps_ffmpeg(video_path, repertoire, seconde):
         images_extraites.append(image_path)
     return images_extraites
 
-
+###
 # Fonction d'analyse d'émotion d'une image
 def analyser_image(image_path, detector):
     if image_path is None:
+        st.write(f"Aucune image extraite pour le chemin : {image_path}")
         return {}
     image = cv2.imread(image_path)
     if image is None:
+        st.write(f"Impossible de lire l'image : {image_path}")
         return {}
     resultats = detector.detect_emotions(image)
-    return resultats[0]['emotions'] if resultats else {}
+    if resultats:
+        for result in resultats:
+            (x, y, w, h) = result["box"]
+            cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            emotions = result['emotions']
+            for idx, (emotion, score) in enumerate(emotions.items()):
+                text = f"{emotion}: {score:.4f}"
+                cv2.putText(image, text, (x, y + h + 20 + (idx * 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.imwrite(image_path, image)
+        return resultats[0]['emotions']
+    else:
+        st.write(f"Aucune émotion détectée dans l'image {image_path}")
+        return {}
+###
+
 
 
 # Calcul de l'émotion dominante par moyenne des scores
@@ -132,6 +171,18 @@ def optimiser_clusters(X_pca):
     # Retourne le nombre de clusters avec le meilleur score de silhouette
     return range_n_clusters[scores.index(max(scores))]
 
+### Fonction pour analyse de la variance
+# Fonction pour calculer la moyenne et la variance des émotions
+def moyenne_et_variance_par_emotion(emotions_list):
+    emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
+    resultats = {}
+    for emotion in emotions:
+        emotion_scores = [emotion_dict.get(emotion, 0) for emotion_dict in emotions_list]
+        moyenne = np.mean(emotion_scores)
+        variance = np.var(emotion_scores)
+        resultats[emotion] = {'moyenne': moyenne, 'variance': variance}
+    return resultats
+###
 
 # Fonction principale pour analyser la vidéo
 def analyser_video(video_url, start_time, end_time, repertoire_travail):
@@ -166,8 +217,102 @@ def analyser_video(video_url, start_time, end_time, repertoire_travail):
     st.write("Scores des émotions par frame (25 fps)")
     st.dataframe(df_emotions)
 
+    ###
+    # Ajout du streamgraph pour les émotions par frame
+    df_emotions['Frame_Index'] = df_emotions.apply(lambda x: x['Seconde'] * 25 + int(x['Frame'].split('_')[1]), axis=1)
+    df_streamgraph_frames = df_emotions.melt(id_vars=['Frame_Index', 'Seconde'],
+                                             value_vars=['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise',
+                                                         'neutral'],
+                                             var_name='Emotion',
+                                             value_name='Score')
+
+    streamgraph_frames = alt.Chart(df_streamgraph_frames).mark_area().encode(
+        x=alt.X('Frame_Index:Q', title='Frame Index'),
+        y=alt.Y('Score:Q', title='Score des émotions', stack='center'),
+        color=alt.Color('Emotion:N', title='Émotion'),
+        tooltip=['Frame_Index', 'Emotion', 'Score']
+    ).properties(
+        title='Streamgraph des émotions par frame (25 fps)',
+        width=800,
+        height=400
+    )
+
+    st.write("#### Streamgraph des émotions par frame (25fps)")
+    st.altair_chart(streamgraph_frames, use_container_width=True)
+    ###
+
     st.write("Moyenne des émotions par seconde")
     st.dataframe(df_emotion_dominante_moyenne)
+
+    ###
+    # Ajout du streamgraph pour les moyennes des émotions par seconde
+    df_streamgraph_seconds = df_emotion_dominante_moyenne.melt(
+        id_vars=['Seconde'],
+        value_vars=['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral'],
+        var_name='Emotion',
+        value_name='Score'
+    )
+
+    streamgraph_seconds = alt.Chart(df_streamgraph_seconds).mark_area().encode(
+        x=alt.X('Seconde:Q', title=f'Secondes (de {start_time} à {end_time})'),
+        y=alt.Y('Score:Q', title='Score des émotions', stack='center'),
+        color=alt.Color('Emotion:N', title='Émotion'),
+        tooltip=['Seconde', 'Emotion', 'Score']
+    ).properties(
+        title='Streamgraph des moyennes des émotions par seconde',
+        width=800,
+        height=400
+    )
+
+    st.write("#### Streamgraph des moyennes des émotions par seconde")
+    st.altair_chart(streamgraph_seconds, use_container_width=True)
+####
+
+####
+    # Ajout du calcul de la variance et de la moyenne par seconde
+
+    # Calcul des moyennes et variances des émotions par seconde
+    stats_par_seconde = moyenne_et_variance_par_emotion(emotion_dominante_moyenne_results)
+
+    if stats_par_seconde:
+        # Convertir les résultats en DataFrame pour affichage
+        df_stats_seconde = pd.DataFrame(stats_par_seconde).T.reset_index()
+        df_stats_seconde.columns = ['Emotion', 'Moyenne', 'Variance']
+
+        # Afficher la DataFrame des moyennes et variances
+        st.write("#### Tableau des moyennes et variances des émotions par seconde")
+        st.dataframe(df_stats_seconde)
+
+        # Création du graphique combinant Moyenne et Variance
+        st.write("#### Graphique des moyennes et variances des émotions par seconde")
+
+        # Barres pour les moyennes
+        moyenne_bar_seconde = alt.Chart(df_stats_seconde).mark_bar().encode(
+            x=alt.X('Emotion:N', title='Émotion'),
+            y=alt.Y('Moyenne:Q', title='Moyenne des probabilités'),
+            color=alt.Color('Emotion:N', legend=None)
+        )
+
+        # Points pour les variances
+        variance_point_seconde = alt.Chart(df_stats_seconde).mark_circle(size=100, color='red').encode(
+            x=alt.X('Emotion:N', title='Émotion'),
+            y=alt.Y('Variance:Q', title='Variance des probabilités'),
+            tooltip=['Emotion', 'Variance']
+        )
+
+        # Superposer les deux graphiques
+        graphique_combine_seconde = alt.layer(moyenne_bar_seconde, variance_point_seconde).resolve_scale(
+            y='independent'
+        ).properties(
+            width=600,
+            height=400,
+        )
+
+        # Affichage du graphique
+        st.altair_chart(graphique_combine_seconde, use_container_width=True)
+    else:
+        st.write("Aucune donnée disponible pour les moyennes et variances.")
+#####
 
     # Préparation des données pour le clustering et PCA
     emotions = ['angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral']
@@ -269,6 +414,44 @@ def analyser_video(video_url, start_time, end_time, repertoire_travail):
         st.write(cluster_means)
         st.write("---")
 
+###
+    # Calcul des moyennes des émotions par cluster
+    cluster_means = df_emotion_dominante_moyenne.groupby('Cluster')[emotions].mean()
+
+    # 1. Calcul de la similarité cosinus entre les centroïdes des clusters
+    centroids_similarity = cosine_similarity(centroids)  # Obtenez les centroïdes de KMeans
+    df_similarity_centroids = pd.DataFrame(centroids_similarity,
+                                           index=[f'Cluster {i}' for i in range(n_clusters)],
+                                           columns=[f'Cluster {i}' for i in range(n_clusters)])
+
+    # 2. Calcul de la similarité cosinus entre les moyennes des émotions par cluster
+    emotion_similarity = cosine_similarity(cluster_means.values)
+    df_similarity_means = pd.DataFrame(emotion_similarity,
+                                       index=[f'Cluster {i}' for i in range(n_clusters)],
+                                       columns=[f'Cluster {i}' for i in range(n_clusters)])
+
+    # 3. Affichage des similarités cosinus entre les centroïdes dans Streamlit
+    st.subheader("Similarité cosinus entre les centroïdes des clusters")
+    st.write("Les valeurs proches de 1 indiquent que les clusters sont très similaires.")
+    st.dataframe(df_similarity_centroids)
+
+    # 4. Affichage des similarités cosinus entre les moyennes des émotions dans Streamlit
+    st.subheader("Similarité cosinus entre les moyennes des émotions par cluster")
+    st.write("Les valeurs proches de 1 indiquent que les moyennes des émotions entre clusters sont très similaires.")
+    st.dataframe(df_similarity_means)
+
+    # 5. Heatmap pour la similarité cosinus entre les centroïdes des clusters
+    st.subheader("Heatmap - Similarité cosinus entre les centroïdes des clusters")
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(df_similarity_centroids, annot=True, cmap="coolwarm", ax=ax)
+    st.pyplot(fig)
+
+    # 6. Heatmap pour la similarité cosinus entre les moyennes des émotions dans chaque cluster
+    st.subheader("Heatmap - Similarité cosinus entre les moyennes des émotions dans chaque cluster")
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(df_similarity_means, annot=True, cmap="coolwarm", ax=ax)
+    st.pyplot(fig)
+###
 
 # Interface Streamlit
 st.title("Analyse des émotions avec clustering K-means")
@@ -288,8 +471,16 @@ if st.button("Lancer l'analyse"):
     else:
         st.write("Veuillez définir le répertoire de travail et l'URL de la vidéo.")
 
+# Explication des résultats en Markdown
+st.markdown("""
+### Interprétation des résultats de similarité cosinus
 
+- **Similarité cosinus entre les centroïdes des clusters** : 
+    - Cette mesure vous permet de comprendre à quel point les clusters sont proches les uns des autres dans l'espace des composantes principales (PCA).
+    - Une valeur proche de 1 indique que deux clusters sont très similaires dans cet espace. Cela peut signifier que ces clusters capturent des combinaisons émotionnelles proches dans l'analyse.
 
-
-
-
+- **Similarité cosinus entre les moyennes des émotions par cluster** :
+    - Cette mesure compare les **moyennes des émotions** de chaque cluster.
+    - Une valeur proche de 1 dans cette matrice indique que deux clusters partagent un **profil émotionnel** similaire, même si KMeans les a séparés en deux groupes.
+    - Si des clusters ont des similarités cosinus élevées, il peut être intéressant de les regrouper pour une analyse plus fine, car cela peut indiquer qu'ils capturent des tendances émotionnelles semblables.
+""")
