@@ -28,15 +28,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import silhouette_score
 from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
-# import shutil #suppression du repertoire
+import shutil #suppression du repertoire
 # import pysrt  # Nécessaire pour manipuler les fichiers SRT
-
-import shutil
-import os
-import subprocess
-from yt_dlp import YoutubeDL
-import streamlit as st
-
 
 # Fonction pour vider le cache
 def vider_cache():
@@ -484,3 +477,4 @@ st.markdown("""
     - Une valeur proche de 1 dans cette matrice indique que deux clusters partagent un **profil émotionnel** similaire, même si KMeans les a séparés en deux groupes.
     - Si des clusters ont des similarités cosinus élevées, il peut être intéressant de les regrouper pour une analyse plus fine, car cela peut indiquer qu'ils capturent des tendances émotionnelles semblables.
 """)
+
